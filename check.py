@@ -38,45 +38,30 @@ def send_telegram_message(text):
 
 
 def main():
-    print("جاري تشغيل المتصفح لفحص موقع VOX Cinemas Egypt...")
+    print("جاري تشغيل متصفح Firefox لفحص موقع VOX Cinemas Egypt...")
     current_items = {}
 
     with sync_playwright() as p:
-        # إضافة إعدادات لتخطي خطأ HTTP2 وحظر البوتات
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-http2",
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
-        )
+        # استخدام Firefox لتجاوز تعليق الحماية (Akamai Timeout)
+        browser = p.firefox.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
             viewport={"width": 1366, "height": 768},
             locale="en-US",
             timezone_id="Africa/Cairo",
             extra_http_headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-                "Upgrade-Insecure-Requests": "1",
+                "Accept-Language": "en-US,en;q=0.5",
             },
         )
-
-        # إخفاء بصمة الأتمتة (webdriver) عن الموقع
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
 
         page = context.new_page()
 
         try:
             print(f"فتح صفحة الأفلام: {BASE_URL}")
-            page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_selector("article.movie-summary, a[href*='/movies/']", timeout=25000)
+            # استخدام commit لتجنب انتظار السكربتات المعلقة
+            page.goto(BASE_URL, wait_until="commit", timeout=45000)
+            page.wait_for_selector("article.movie-summary, a[href*='/movies/']", timeout=30000)
             time.sleep(3)
         except Exception as e:
             print(f"تعذر تحميل الصفحة الرئيسية لفوكس سينما: {e}")
@@ -113,8 +98,8 @@ def main():
             }
 
             try:
-                page.goto(movie_url, wait_until="domcontentloaded", timeout=45000)
-                time.sleep(2.5)
+                page.goto(movie_url, wait_until="commit", timeout=35000)
+                time.sleep(3.5)
 
                 booking_links = page.query_selector_all("a[href*='/booking/'], a[data-slug], .showtimes a")
 
