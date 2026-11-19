@@ -1,17 +1,18 @@
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-# صفحات فروع VOX Cinemas في مصر على موقع السينما.كوم (elCinema)
+# الروابط الرسمية لفروع VOX Cinemas في مصر
 VOX_BRANCHES = {
-    "VOX مول مصر (Mall of Egypt)": "https://elcinema.com/theater/3101122/",
-    "VOX سيتي سنتر ألماظة (City Centre Almaza)": "https://elcinema.com/theater/3101168/",
-    "VOX سيتي سنتر الإسكندرية": "https://elcinema.com/theater/3101119/",
+    "VOX مول مصر (Mall of Egypt)": "https://elcinema.com/theater/3101271/",
+    "VOX سيتي سنتر ألماظة (Almaza)": "https://elcinema.com/theater/3101353/",
+    "VOX سيتي سنتر الإسكندرية": "https://elcinema.com/theater/3101027/",
 }
 
 TOKEN = os.environ.get("TOKEN")
@@ -52,32 +53,28 @@ def main():
             res.raise_for_status()
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # استخراج كل الأفلام ومواعيد العرض في الفرع
-            movie_blocks = soup.select(".jumbo, .boxed-content, div:has(> h3 a[href*='/work/'])")
-            
-            for block in movie_blocks:
-                title_el = block.select_one("h3 a[href*='/work/'], a[href*='/work/']")
-                if not title_el:
-                    continue
-                
-                movie_name = title_el.get_text(strip=True)
-                movie_link = urljoin("https://elcinema.com", title_el.get("href", ""))
-                
-                if not movie_name or len(movie_name) < 2:
+            # البحث عن كل روابط الأفلام في صفحة السينما
+            seen_movies_in_branch = set()
+            for a in soup.find_all("a", href=re.compile(r"^/work/\d+")):
+                movie_name = a.get_text(strip=True)
+                href = a.get("href", "")
+                if not movie_name or len(movie_name) < 2 or href in seen_movies_in_branch:
                     continue
 
-                # استخراج أوقات العرض (الساعات)
+                seen_movies_in_branch.add(href)
+                movie_link = urljoin("https://elcinema.com", href)
+
+                # الصعود للحاوية الأب الخاصة بالفيلم لاستخراج مواعيد الحفلات
+                container = a.find_parent("div", class_="jumbo") or a.find_parent("div")
                 times = []
-                for li in block.select("ul.list-inline li, .showtimes li, span.label"):
-                    t_text = " ".join(li.get_text().split())
-                    if any(ch.isdigit() for ch in t_text) and ("ص" in t_text or "م" in t_text or "AM" in t_text or "PM" in t_text or ":" in t_text):
-                        if len(t_text) < 25:
-                            times.append(t_text)
+                if container:
+                    # البحث عن الساعات (مثل 10:30 ص أو 01:00 م أو 12:15 AM)
+                    text_block = container.get_text(" ", strip=True)
+                    times = re.findall(r"\b\d{1,2}:\d{2}\s*(?:ص|م|AM|PM|am|pm)\b", text_block)
 
                 if not times:
-                    # تسجيل الفيلم نفسه لو لسه مفيش ساعات محددة
-                    sig = f"{branch_name}|{movie_name}"
-                    item_id = f"VOX_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
+                    sig = f"{branch_name}|{href}"
+                    item_id = f"VOX_M_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
                     current_items[item_id] = (
                         f"🎬 <b>فيلم جديد في {branch_name}!</b>\n\n"
                         f"الفيلم: <b>{movie_name}</b>\n"
@@ -86,8 +83,8 @@ def main():
                     )
                 else:
                     for showtime in set(times):
-                        sig = f"{branch_name}|{movie_name}|{showtime}"
-                        item_id = f"VOX_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
+                        sig = f"{branch_name}|{href}|{showtime}"
+                        item_id = f"VOX_S_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
                         current_items[item_id] = (
                             f"🎟️ <b>معاد جديد نزل في {branch_name}!</b>\n\n"
                             f"🎬 الفيلم: <b>{movie_name}</b>\n"
@@ -95,7 +92,7 @@ def main():
                             f"🔗 احجز من موقع فوكس:\nhttps://egy.voxcinemas.com"
                         )
 
-            print(f"تم فحص {branch_name} بنجاح.")
+            print(f"تم فحص {branch_name} بنجاح (عدد الأفلام: {len(seen_movies_in_branch)}).")
             time.sleep(1)
 
         except Exception as e:
