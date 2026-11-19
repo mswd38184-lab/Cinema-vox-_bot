@@ -1,4 +1,3 @@
-```python
 import hashlib
 import json
 import os
@@ -8,11 +7,10 @@ from urllib.parse import urljoin
 import requests
 from playwright.sync_api import sync_playwright
 
-# رابط أفلام فوكس سينما مصر (تقدر تخليه /movies/whatson أو /movies/comingsoon)
+# رابط أفلام فوكس سينما مصر
 BASE_URL = "https://egy.voxcinemas.com/movies/whatson"
 
-# لو حابب تراقب فرع معين بس اكتب اسمه هنا (مثلاً: "Mall of Egypt" أو "City Centre Almaza")
-# وسيبه فاضي "" لو عايز كل الفروع في مصر
+# لو حابب تراقب فرع معين بس اكتب اسمه هنا (مثلاً: "Mall of Egypt") أو سيبه فاضي "" لكل الفروع
 TARGET_CINEMA = ""
 
 TOKEN = os.environ.get("TOKEN")
@@ -44,7 +42,6 @@ def main():
     current_items = {}
 
     with sync_playwright() as p:
-        # تشغيل متصفح Chromium في الخلفية
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -56,7 +53,6 @@ def main():
         try:
             print(f"فتح صفحة الأفلام: {BASE_URL}")
             page.goto(BASE_URL, wait_until="domcontentloaded", timeout=45000)
-            # انتظار تحميل كروت الأفلام
             page.wait_for_selector("article.movie-summary, a[href*='/movies/']", timeout=20000)
             time.sleep(2)
         except Exception as e:
@@ -64,10 +60,9 @@ def main():
             browser.close()
             sys.exit(1)
 
-        # استخراج روابط وأسماء الأفلام المعروضة حالياً
         movies = {}
         movie_elements = page.query_selector_all("article.movie-summary")
-        
+
         if movie_elements:
             for el in movie_elements:
                 link_el = el.query_selector("h3 a, a[href*='/movies/']")
@@ -77,7 +72,6 @@ def main():
                     if href and title and "/movies/whatson" not in href and "/movies/comingsoon" not in href:
                         movies[urljoin(BASE_URL, href)] = title
         else:
-            # خطة بديلة لو هيكل الصفحة اتغير
             for a in page.query_selector_all("a[href*='/movies/']"):
                 href = a.get_attribute("href")
                 title = a.inner_text().strip()
@@ -89,7 +83,6 @@ def main():
             browser.close()
             sys.exit(0)
 
-        # المرور على كل فيلم لاستخراج المواعيد والحجوزات المتاحة
         for movie_url, movie_name in movies.items():
             movie_id = f"VOX_MOVIE_{hashlib.md5(movie_url.encode()).hexdigest()[:10]}"
             current_items[movie_id] = {
@@ -100,37 +93,31 @@ def main():
                 page.goto(movie_url, wait_until="domcontentloaded", timeout=35000)
                 time.sleep(2)
 
-                # البحث عن حاويات المواعيد في صفحة الفيلم بـ VOX
-                # فوكس بتعرض المواعيد جوه عناصر .dates أو .showtimes أو روابط الحجز /booking/
                 booking_links = page.query_selector_all("a[href*='/booking/'], a[data-slug], .showtimes a")
-                
+
                 for b_link in booking_links:
                     time_text = " ".join(b_link.inner_text().split())
                     b_href = b_link.get_attribute("href") or ""
-                    
+
                     if not time_text or len(time_text) > 30:
                         continue
 
-                    # محاولة معرفة اسم الفرع ونوع التجربة (IMAX, MAX, VIP, Standard) والتاريخ
                     context_info = page.evaluate("""(el) => {
                         let cinema = "";
                         let exp = "";
                         let date = "";
                         
-                        // البحث عن اسم الفرع في العناصر الأب
                         let cinemaSection = el.closest('[data-cinema], .cinema-showtimes, section');
                         if (cinemaSection) {
                             let h2 = cinemaSection.querySelector('h2, h3');
                             if (h2) cinema = h2.innerText.trim();
                         }
                         
-                        // البحث عن نوع القاعة (IMAX / VIP / 4DX)
                         let expSection = el.closest('ol, ul, .experience-group');
                         if (expSection && expSection.previousElementSibling) {
                             exp = expSection.previousElementSibling.innerText.trim();
                         }
                         
-                        // التاريخ المحدد حالياً في الصفحة
                         let activeDate = document.querySelector('.dates .active, [aria-selected="true"]');
                         if (activeDate) date = activeDate.innerText.replace(/\\n/g, ' ').trim();
                         
@@ -141,7 +128,6 @@ def main():
                     exp_name = context_info.get("exp", "")
                     date_str = context_info.get("date", "")
 
-                    # فلترة بالفرع لو المستخدم حدد فرع معين في TARGET_CINEMA
                     if TARGET_CINEMA and TARGET_CINEMA.lower() not in cinema_name.lower():
                         continue
 
@@ -176,7 +162,6 @@ def main():
 
     print(f"إجمالي العناصر المرصودة في VOX: {len(current_items)}")
 
-    # قراءة السجل المحفوظ
     seen = set()
     is_first_run = not os.path.exists(FILE)
 
@@ -189,7 +174,6 @@ def main():
         except Exception:
             seen = set()
 
-    # أول تشغيل يحفظ المواعيد الحالية بدون إرسال رسائل
     if is_first_run or len(seen) == 0:
         print("أول تشغيل: حفظ مواعيد فوكس سينما الحالية كمرجع...")
         with open(FILE, "w", encoding="utf-8") as f:
@@ -197,13 +181,12 @@ def main():
         print("تم الحفظ بنجاح.")
         return
 
-    # إرسال إشعار بالمواعيد أو الأفلام الجديدة فقط
     new_keys = set(current_items.keys()) - seen
     print(f"عدد التحديثات الجديدة في VOX: {len(new_keys)}")
 
     for key in new_keys:
         send_telegram_message(current_items[key]["text"])
-        time.sleep(0.5)  # تجنب حظر تليجرام للرسائل السريعة
+        time.sleep(0.5)
 
     if new_keys:
         updated_seen = sorted(list(seen | set(current_items.keys())))
@@ -214,4 +197,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
