@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import re
@@ -8,10 +7,10 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-# الروابط الرسمية لفروع VOX Cinemas في القاهرة فقط
+# الروابط الرسمية لفروع VOX Cinemas في القاهرة
 VOX_BRANCHES = {
-    "VOX مول مصر (Mall of Egypt)": "https://elcinema.com/theater/3101271/",
-    "VOX سيتي سنتر ألماظة (Almaza)": "https://elcinema.com/theater/3101353/",
+    "VOX مول مصر": "https://elcinema.com/theater/3101271/",
+    "VOX سيتي سنتر ألماظة": "https://elcinema.com/theater/3101353/",
 }
 
 TOKEN = os.environ.get("TOKEN")
@@ -52,15 +51,19 @@ def main():
             res.raise_for_status()
             soup = BeautifulSoup(res.text, "html.parser")
 
-            seen_movies_in_branch = set()
-            for a in soup.find_all("a", href=re.compile(r"^/work/\d+")):
+            seen_movie_ids = set()
+            # التقاط روابط الأفلام الرئيسية فقط (مثل /work/2098323/) واستبعاد الفيديوهات
+            for a in soup.find_all("a", href=re.compile(r"^/work/\d+/?$")):
                 movie_name = a.get_text(strip=True)
-                href = a.get("href", "")
-                if not movie_name or len(movie_name) < 2 or href in seen_movies_in_branch:
+                href = a.get("href", "").rstrip("/")
+
+                if not movie_name or len(movie_name) < 2 or "إعلان" in movie_name:
+                    continue
+                if href in seen_movie_ids:
                     continue
 
-                seen_movies_in_branch.add(href)
-                movie_link = urljoin("https://elcinema.com", href)
+                seen_movie_ids.add(href)
+                movie_link = urljoin("https://elcinema.com", href + "/")
 
                 container = a.find_parent("div", class_="jumbo") or a.find_parent("div")
                 times = []
@@ -69,9 +72,8 @@ def main():
                     times = re.findall(r"\b\d{1,2}:\d{2}\s*(?:ص|م|AM|PM|am|pm)\b", text_block)
 
                 if not times:
-                    sig = f"{branch_name}|{href}"
-                    item_id = f"VOX_M_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
-                    current_items[item_id] = (
+                    item_key = f"{branch_name} | {movie_name}"
+                    current_items[item_key] = (
                         f"🎬 <b>فيلم جديد في {branch_name}!</b>\n\n"
                         f"الفيلم: <b>{movie_name}</b>\n"
                         f"🔗 التفاصيل: {movie_link}\n"
@@ -79,16 +81,15 @@ def main():
                     )
                 else:
                     for showtime in set(times):
-                        sig = f"{branch_name}|{href}|{showtime}"
-                        item_id = f"VOX_S_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
-                        current_items[item_id] = (
+                        item_key = f"{branch_name} | {movie_name} | {showtime}"
+                        current_items[item_key] = (
                             f"🎟️ <b>معاد جديد نزل في {branch_name}!</b>\n\n"
                             f"🎬 الفيلم: <b>{movie_name}</b>\n"
                             f"🕒 المعاد: <b>{showtime}</b>\n\n"
                             f"🔗 احجز من موقع فوكس:\nhttps://egy.voxcinemas.com"
                         )
 
-            print(f"تم فحص {branch_name} بنجاح (عدد الأفلام: {len(seen_movies_in_branch)}).")
+            print(f"تم فحص {branch_name} بنجاح (عدد الأفلام: {len(seen_movie_ids)}).")
             time.sleep(1)
 
         except Exception as e:
@@ -112,8 +113,11 @@ def main():
         except Exception:
             seen = set()
 
-    if is_first_run or len(seen) == 0:
-        print("أول تشغيل: حفظ المواعيد الحالية في seen.json...")
+    # إذا كان الملف قديماً (يحتوي على أكواد مشفرة) أو فارغاً، نعيد تهيئته بالأسماء الواضحة بدون إزعاج
+    has_old_hashes = any(item.startswith("VOX_") for item in seen)
+
+    if is_first_run or len(seen) == 0 or has_old_hashes:
+        print("تحديث قاعدة البيانات بالأسماء الواضحة في seen.json...")
         with open(FILE, "w", encoding="utf-8") as f:
             json.dump(sorted(list(current_items.keys())), f, ensure_ascii=False, indent=2)
         print("تم الحفظ بنجاح!")
