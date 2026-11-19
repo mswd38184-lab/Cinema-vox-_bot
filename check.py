@@ -8,11 +8,10 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-# الروابط الرسمية لفروع VOX Cinemas في مصر
+# الروابط الرسمية لفروع VOX Cinemas في القاهرة فقط
 VOX_BRANCHES = {
     "VOX مول مصر (Mall of Egypt)": "https://elcinema.com/theater/3101271/",
     "VOX سيتي سنتر ألماظة (Almaza)": "https://elcinema.com/theater/3101353/",
-    "VOX سيتي سنتر الإسكندرية": "https://elcinema.com/theater/3101027/",
 }
 
 TOKEN = os.environ.get("TOKEN")
@@ -44,7 +43,7 @@ def send_telegram_message(text):
 
 
 def main():
-    print("جاري فحص مواعيد VOX Cinemas Egypt...")
+    print("جاري فحص مواعيد VOX Cinemas Cairo...")
     current_items = {}
 
     for branch_name, branch_url in VOX_BRANCHES.items():
@@ -53,7 +52,6 @@ def main():
             res.raise_for_status()
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # البحث عن كل روابط الأفلام في صفحة السينما
             seen_movies_in_branch = set()
             for a in soup.find_all("a", href=re.compile(r"^/work/\d+")):
                 movie_name = a.get_text(strip=True)
@@ -64,11 +62,9 @@ def main():
                 seen_movies_in_branch.add(href)
                 movie_link = urljoin("https://elcinema.com", href)
 
-                # الصعود للحاوية الأب الخاصة بالفيلم لاستخراج مواعيد الحفلات
                 container = a.find_parent("div", class_="jumbo") or a.find_parent("div")
                 times = []
                 if container:
-                    # البحث عن الساعات (مثل 10:30 ص أو 01:00 م أو 12:15 AM)
                     text_block = container.get_text(" ", strip=True)
                     times = re.findall(r"\b\d{1,2}:\d{2}\s*(?:ص|م|AM|PM|am|pm)\b", text_block)
 
