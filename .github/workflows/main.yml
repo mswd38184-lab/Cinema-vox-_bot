@@ -19,10 +19,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies and Playwright
+      - name: Install dependencies and Playwright Firefox
         run: |
           pip install requests playwright
-          playwright install chromium
+          playwright install firefox
 
       - name: Run VOX Cinema Checker
         run: python check.py
