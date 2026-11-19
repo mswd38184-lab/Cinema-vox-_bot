@@ -5,21 +5,26 @@ import sys
 import time
 from urllib.parse import urljoin
 import requests
-from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
 
-# رابط أفلام فوكس سينما مصر
-BASE_URL = "https://egy.voxcinemas.com/movies/whatson"
-
-# لو حابب تراقب فرع معين بس اكتب اسمه هنا (مثلاً: "Mall of Egypt") أو سيبه فاضي "" لكل الفروع
-TARGET_CINEMA = ""
+# صفحات فروع VOX Cinemas في مصر على موقع السينما.كوم (elCinema)
+VOX_BRANCHES = {
+    "VOX مول مصر (Mall of Egypt)": "https://elcinema.com/theater/3101122/",
+    "VOX سيتي سنتر ألماظة (City Centre Almaza)": "https://elcinema.com/theater/3101168/",
+    "VOX سيتي سنتر الإسكندرية": "https://elcinema.com/theater/3101119/",
+}
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 FILE = "seen.json"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
+}
+
 
 def send_telegram_message(text):
-    """إرسال رسالة عبر بوت تليجرام"""
     if not TOKEN or not CHAT_ID:
         print("تنبيه: TOKEN أو CHAT_ID غير موجودين.")
         return
@@ -38,137 +43,69 @@ def send_telegram_message(text):
 
 
 def main():
-    print("جاري تشغيل متصفح Firefox لفحص موقع VOX Cinemas Egypt...")
+    print("جاري فحص مواعيد VOX Cinemas Egypt...")
     current_items = {}
 
-    with sync_playwright() as p:
-        # استخدام Firefox لتجاوز تعليق الحماية (Akamai Timeout)
-        browser = p.firefox.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-            viewport={"width": 1366, "height": 768},
-            locale="en-US",
-            timezone_id="Africa/Cairo",
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-            },
-        )
-
-        page = context.new_page()
-
+    for branch_name, branch_url in VOX_BRANCHES.items():
         try:
-            print(f"فتح صفحة الأفلام: {BASE_URL}")
-            # استخدام commit لتجنب انتظار السكربتات المعلقة
-            page.goto(BASE_URL, wait_until="commit", timeout=45000)
-            page.wait_for_selector("article.movie-summary, a[href*='/movies/']", timeout=30000)
-            time.sleep(3)
-        except Exception as e:
-            print(f"تعذر تحميل الصفحة الرئيسية لفوكس سينما: {e}")
-            browser.close()
-            sys.exit(1)
+            res = requests.get(branch_url, headers=HEADERS, timeout=20)
+            res.raise_for_status()
+            soup = BeautifulSoup(res.text, "html.parser")
 
-        movies = {}
-        movie_elements = page.query_selector_all("article.movie-summary")
+            # استخراج كل الأفلام ومواعيد العرض في الفرع
+            movie_blocks = soup.select(".jumbo, .boxed-content, div:has(> h3 a[href*='/work/'])")
+            
+            for block in movie_blocks:
+                title_el = block.select_one("h3 a[href*='/work/'], a[href*='/work/']")
+                if not title_el:
+                    continue
+                
+                movie_name = title_el.get_text(strip=True)
+                movie_link = urljoin("https://elcinema.com", title_el.get("href", ""))
+                
+                if not movie_name or len(movie_name) < 2:
+                    continue
 
-        if movie_elements:
-            for el in movie_elements:
-                link_el = el.query_selector("h3 a, a[href*='/movies/']")
-                if link_el:
-                    href = link_el.get_attribute("href")
-                    title = link_el.inner_text().strip()
-                    if href and title and "/movies/whatson" not in href and "/movies/comingsoon" not in href:
-                        movies[urljoin(BASE_URL, href)] = title
-        else:
-            for a in page.query_selector_all("a[href*='/movies/']"):
-                href = a.get_attribute("href")
-                title = a.inner_text().strip()
-                if href and title and len(title) > 2 and "whatson" not in href and "comingsoon" not in href:
-                    movies[urljoin(BASE_URL, href)] = title
+                # استخراج أوقات العرض (الساعات)
+                times = []
+                for li in block.select("ul.list-inline li, .showtimes li, span.label"):
+                    t_text = " ".join(li.get_text().split())
+                    if any(ch.isdigit() for ch in t_text) and ("ص" in t_text or "م" in t_text or "AM" in t_text or "PM" in t_text or ":" in t_text):
+                        if len(t_text) < 25:
+                            times.append(t_text)
 
-        print(f"تم العثور على {len(movies)} فيلم في فوكس سينما.")
-        if not movies:
-            browser.close()
-            sys.exit(0)
-
-        for movie_url, movie_name in movies.items():
-            movie_id = f"VOX_MOVIE_{hashlib.md5(movie_url.encode()).hexdigest()[:10]}"
-            current_items[movie_id] = {
-                "text": f"🎬 <b>فيلم جديد في VOX Cinemas!</b>\n\nالفيلم: <b>{movie_name}</b>\nالرابط: {movie_url}"
-            }
-
-            try:
-                page.goto(movie_url, wait_until="commit", timeout=35000)
-                time.sleep(3.5)
-
-                booking_links = page.query_selector_all("a[href*='/booking/'], a[data-slug], .showtimes a")
-
-                for b_link in booking_links:
-                    time_text = " ".join(b_link.inner_text().split())
-                    b_href = b_link.get_attribute("href") or ""
-
-                    if not time_text or len(time_text) > 30:
-                        continue
-
-                    context_info = page.evaluate("""(el) => {
-                        let cinema = "";
-                        let exp = "";
-                        let date = "";
-                        
-                        let cinemaSection = el.closest('[data-cinema], .cinema-showtimes, section');
-                        if (cinemaSection) {
-                            let h2 = cinemaSection.querySelector('h2, h3');
-                            if (h2) cinema = h2.innerText.trim();
-                        }
-                        
-                        let expSection = el.closest('ol, ul, .experience-group');
-                        if (expSection && expSection.previousElementSibling) {
-                            exp = expSection.previousElementSibling.innerText.trim();
-                        }
-                        
-                        let activeDate = document.querySelector('.dates .active, [aria-selected="true"]');
-                        if (activeDate) date = activeDate.innerText.replace(/\\n/g, ' ').trim();
-                        
-                        return {cinema, exp, date};
-                    }""", b_link)
-
-                    cinema_name = context_info.get("cinema", "غير محدد")
-                    exp_name = context_info.get("exp", "")
-                    date_str = context_info.get("date", "")
-
-                    if TARGET_CINEMA and TARGET_CINEMA.lower() not in cinema_name.lower():
-                        continue
-
-                    full_booking_url = urljoin(movie_url, b_href) if b_href else movie_url
-                    slot_signature = f"{movie_url}|{cinema_name}|{date_str}|{exp_name}|{time_text}|{b_href}"
-                    slot_id = f"VOX_SLOT_{hashlib.md5(slot_signature.encode()).hexdigest()[:12]}"
-
-                    details_parts = []
-                    if cinema_name:
-                        details_parts.append(f"📍 الفرع: {cinema_name}")
-                    if date_str:
-                        details_parts.append(f"📅 اليوم: {date_str}")
-                    if exp_name:
-                        details_parts.append(f"🎥 القاعة: {exp_name}")
-                    details_parts.append(f"🕒 الساعة: <b>{time_text}</b>")
-
-                    details_msg = "\n".join(details_parts)
-
-                    current_items[slot_id] = {
-                        "text": (
-                            f"🎟️ <b>معاد حجز جديد في VOX Cinemas!</b>\n\n"
+                if not times:
+                    # تسجيل الفيلم نفسه لو لسه مفيش ساعات محددة
+                    sig = f"{branch_name}|{movie_name}"
+                    item_id = f"VOX_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
+                    current_items[item_id] = (
+                        f"🎬 <b>فيلم جديد في {branch_name}!</b>\n\n"
+                        f"الفيلم: <b>{movie_name}</b>\n"
+                        f"🔗 التفاصيل: {movie_link}\n"
+                        f"🎟️ للحجز: https://egy.voxcinemas.com"
+                    )
+                else:
+                    for showtime in set(times):
+                        sig = f"{branch_name}|{movie_name}|{showtime}"
+                        item_id = f"VOX_{hashlib.md5(sig.encode()).hexdigest()[:12]}"
+                        current_items[item_id] = (
+                            f"🎟️ <b>معاد جديد نزل في {branch_name}!</b>\n\n"
                             f"🎬 الفيلم: <b>{movie_name}</b>\n"
-                            f"{details_msg}\n\n"
-                            f"🔗 احجز تذكرتك الآن:\n{full_booking_url}"
+                            f"🕒 المعاد: <b>{showtime}</b>\n\n"
+                            f"🔗 احجز من موقع فوكس:\nhttps://egy.voxcinemas.com"
                         )
-                    }
-            except Exception as e:
-                print(f"خطأ أثناء فحص مواعيد فيلم {movie_name}: {e}")
-                continue
 
-        browser.close()
+            print(f"تم فحص {branch_name} بنجاح.")
+            time.sleep(1)
 
-    print(f"إجمالي العناصر المرصودة في VOX: {len(current_items)}")
+        except Exception as e:
+            print(f"خطأ في فحص {branch_name}: {e}")
+
+    print(f"إجمالي المواعيد والأفلام المرصودة: {len(current_items)}")
+
+    if not current_items:
+        print("لم يتم العثور على مواعيد حالياً.")
+        sys.exit(0)
 
     seen = set()
     is_first_run = not os.path.exists(FILE)
@@ -183,24 +120,24 @@ def main():
             seen = set()
 
     if is_first_run or len(seen) == 0:
-        print("أول تشغيل: حفظ مواعيد فوكس سينما الحالية كمرجع...")
+        print("أول تشغيل: حفظ المواعيد الحالية في seen.json...")
         with open(FILE, "w", encoding="utf-8") as f:
             json.dump(sorted(list(current_items.keys())), f, ensure_ascii=False, indent=2)
-        print("تم الحفظ بنجاح.")
+        print("تم الحفظ بنجاح!")
         return
 
     new_keys = set(current_items.keys()) - seen
-    print(f"عدد التحديثات الجديدة في VOX: {len(new_keys)}")
+    print(f"عدد المواعيد الجديدة: {len(new_keys)}")
 
     for key in new_keys:
-        send_telegram_message(current_items[key]["text"])
+        send_telegram_message(current_items[key])
         time.sleep(0.5)
 
     if new_keys:
         updated_seen = sorted(list(seen | set(current_items.keys())))
         with open(FILE, "w", encoding="utf-8") as f:
             json.dump(updated_seen, f, ensure_ascii=False, indent=2)
-        print("تم تحديث ملف seen.json بنجاح.")
+        print("تم تحديث seen.json بنجاح.")
 
 
 if __name__ == "__main__":
